@@ -263,13 +263,6 @@ with col_max:
 if min_size > max_size:
     st.sidebar.error("Ошибка: Min > Max")
 
-# 5. Режим статистики
-weight_mode = st.sidebar.radio("Режим нормировки", ["Count", "Area", "Volume"], horizontal=True)
-show_w_mean = st.sidebar.checkbox("Взвешенное среднее", value=True)
-show_w_median = st.sidebar.checkbox("Взвешенная медиана", value=True)
-show_u_mean = st.sidebar.checkbox("Арифм. среднее (простое)", value=False)
-show_kde_line = st.sidebar.checkbox("Линия KDE (тренд)", value=True)
-
 # 6. Кнопки управления (внизу сайдбара)
 
 st.sidebar.divider()
@@ -282,6 +275,15 @@ btn_add = st.sidebar.button("➕ ДОБАВИТЬ В ПУЛ", use_container_widt
 if st.sidebar.button("🗑 СБРОСИТЬ ПУЛ", use_container_width=True):
     st.session_state['data_pool'] = []
     st.toast("Пул данных очищен!")
+
+st.sidebar.divider()
+
+# 5. Режим статистики
+weight_mode = st.sidebar.radio("Режим нормировки", ["Count", "Area", "Volume"], horizontal=True)
+show_w_mean = st.sidebar.checkbox("Взвешенное среднее", value=True)
+show_w_median = st.sidebar.checkbox("Взвешенная медиана", value=True)
+show_u_mean = st.sidebar.checkbox("Арифм. среднее (простое)", value=False)
+show_kde_line = st.sidebar.checkbox("Линия KDE (тренд)", value=True)
 
 # ================= 5. ГЛАВНАЯ ЛОГИКА ОБРАБОТКИ (MAIN AREA) =================
 
