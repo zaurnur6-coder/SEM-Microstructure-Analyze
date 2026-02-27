@@ -173,16 +173,38 @@ params = {
 }
 
 # --- Вспомогательная функция для синхронизации слайдера и ввода ---
-def synced_widget(label, min_val, max_val, default_val, step=1, help_text=""):
+def synced_widget(label, min_val, max_val, default_val, step=1):
+    # Создаем два уникальных ключа
+    base_key = label.replace(" ", "_").lower()
+    s_key = f"slider_{base_key}"
+    n_key = f"number_{base_key}"
+
+    # Инициализируем значения в session_state, если их еще нет
+    if s_key not in st.session_state:
+        st.session_state[s_key] = default_val
+    if n_key not in st.session_state:
+        st.session_state[n_key] = default_val
+
+    # Функции для синхронизации
+    def update_slider():
+        st.session_state[s_key] = st.session_state[n_key]
+
+    def update_number():
+        st.session_state[n_key] = st.session_state[s_key]
+
     st.markdown(f"**{label}**")
     col_sl, col_num = st.columns([3, 2])
-    # Используем label как ключ для session_state, чтобы виджеты синхронизировались
-    key = label.replace(" ", "_").lower()
+
     with col_sl:
-        val = st.slider(label, min_val, max_val, step=step, key=key, label_visibility="collapsed", help=help_text)
+        # Слайдер меняет числовое поле через update_number
+        st.slider(label, min_val, max_val, step=step, 
+                  key=s_key, on_change=update_number, label_visibility="collapsed")
     with col_num:
-        val = st.number_input(label, min_val, max_val, step=step, key=key, label_visibility="collapsed")
-    return val
+        # Числовое поле меняет слайдер через update_slider
+        st.number_input(label, min_val, max_val, step=step, 
+                        key=n_key, on_change=update_slider, label_visibility="collapsed")
+    
+    return st.session_state[s_key]
     
 params['invert'] = st.sidebar.checkbox("Инвертировать маску (ч/б)", value=False)
 
