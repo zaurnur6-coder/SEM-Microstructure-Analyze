@@ -191,13 +191,30 @@ with st.sidebar.expander("Морфология (Шум/Склейка)"):
     params['close_kernel'] = st.slider("Close Kernel size", 3, 51, 3, step=2) # старт с 3
 
 # 4. Фильтры размера
-# Замени блок фильтров на этот:
 st.sidebar.header("📏 Фильтры частиц")
-min_val, max_val = st.sidebar.slider(
-    "Диапазон размеров (нм)", 
-    0, 10000, (10, 2000) # Возвращает кортеж (min, max)
-)
-min_size, max_size = min_val, max_val
+col_min, col_max = st.sidebar.columns(2)
+
+with col_min:
+    min_size = st.number_input(
+        "Min (нм)", 
+        min_value=0.0, 
+        max_value=100000.0, 
+        value=7.0,   # Твой пример
+        step=0.5     # Позволяет настраивать очень точно
+    )
+
+with col_max:
+    max_size = st.number_input(
+        "Max (нм)", 
+        min_value=0.0, 
+        max_value=100000.0, 
+        value=34.0,  # Твой пример
+        step=1.0
+    )
+
+# Защита от логической ошибки
+if min_size > max_size:
+    st.sidebar.error("Ошибка: Min > Max")
 
 # 5. Режим статистики
 weight_mode = st.sidebar.radio("Режим нормировки", ["Count", "Area", "Volume"], horizontal=True)
