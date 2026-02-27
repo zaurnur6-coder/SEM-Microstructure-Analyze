@@ -172,23 +172,48 @@ params = {
     'invert': False
 }
 
+# --- Вспомогательная функция для синхронизации слайдера и ввода ---
+def synced_widget(label, min_val, max_val, default_val, step=1, help_text=""):
+    st.markdown(f"**{label}**")
+    col_sl, col_num = st.columns([3, 2])
+    # Используем label как ключ для session_state, чтобы виджеты синхронизировались
+    key = label.replace(" ", "_").lower()
+    with col_sl:
+        val = st.slider(label, min_val, max_val, step=step, key=key, label_visibility="collapsed", help=help_text)
+    with col_num:
+        val = st.number_input(label, min_val, max_val, step=step, key=key, label_visibility="collapsed")
+    return val
+    
 params['invert'] = st.sidebar.checkbox("Инвертировать маску (ч/б)", value=False)
-params['blur_size'] = st.sidebar.slider("Размытие (Median Blur)", 1, 15, 3, step=2)
+
+# Размытие
+with st.sidebar:
+    params['blur_size'] = synced_widget("Median Blur", 1, 15, 3, step=2)
 
 if method_name == "Adaptive":
-    params['adaptive_block_size'] = st.sidebar.slider("Block Size", 3, 1001, 203, step=2)
-    params['adaptive_c'] = st.sidebar.slider("C (Constant)", -30, 30, 0)
+    with st.sidebar:
+        params['adaptive_block_size'] = synced_widget("Block Size", 3, 1001, 203, step=2)
+        params['adaptive_c'] = synced_widget("C (Constant)", -30, 30, 0, step=1)
+        params['tophat_kernel'] = 113 
+    
 elif method_name == "Top-Hat":
-    params['tophat_kernel'] = st.sidebar.slider("Top-Hat Kernel", 3, 501, 113, step=2)
+    with st.sidebar:
+        params['tophat_kernel'] = synced_widget("Top-Hat Kernel", 3, 501, 113, step=2)
+        params['adaptive_block_size'], params['adaptive_c'] = 203, 0
+    
+else: # Otsu
+    params['adaptive_block_size'], params['adaptive_c'], params['tophat_kernel'] = 203, 0, 113
 
 st.sidebar.divider()
 
 with st.sidebar.expander("Морфология (Шум/Склейка)"):
     params['enable_opening'] = st.checkbox("Удалить мелкий шум (Opening)", value=False)
-    params['open_kernel'] = st.slider("Open Kernel size", 3, 51, 3, step=2) # старт с 3
+    if params['enable_opening']:
+        params['open_kernel'] = synced_widget("Open Kernel size", 3, 51, 3, step=2)
     
     params['enable_closing'] = st.checkbox("Заполнить пустоты (Closing)", value=True)
-    params['close_kernel'] = st.slider("Close Kernel size", 3, 51, 3, step=2) # старт с 3
+    if params['enable_closing']:
+        params['close_kernel'] = synced_widget("Close Kernel size", 3, 51, 3, step=2)
 
 # 4. Фильтры размера
 st.sidebar.header("📏 Фильтры частиц")
