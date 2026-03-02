@@ -245,7 +245,7 @@ with col_min:
     min_size = st.number_input(
         "Min (нм)", 
         min_value=0.0, 
-        max_value=1000000.0, 
+        max_value=100000.0, 
         value=7.0,   # Твой пример
         step=0.5     # Позволяет настраивать очень точно
     )
@@ -254,7 +254,7 @@ with col_max:
     max_size = st.number_input(
         "Max (нм)", 
         min_value=0.0, 
-        max_value=1000000.0, 
+        max_value=100000.0, 
         value=34.0,  # Твой пример
         step=1.0
     )
@@ -262,6 +262,13 @@ with col_max:
 # Защита от логической ошибки
 if min_size > max_size:
     st.sidebar.error("Ошибка: Min > Max")
+
+# 5. Режим статистики
+weight_mode = st.sidebar.radio("Режим нормировки", ["Count", "Area", "Volume"], horizontal=True)
+show_w_mean = st.sidebar.checkbox("Взвешенное среднее", value=True)
+show_w_median = st.sidebar.checkbox("Взвешенная медиана", value=True)
+show_u_mean = st.sidebar.checkbox("Арифм. среднее (простое)", value=False)
+show_kde_line = st.sidebar.checkbox("Линия KDE (тренд)", value=True)
 
 # 6. Кнопки управления (внизу сайдбара)
 
@@ -275,15 +282,6 @@ btn_add = st.sidebar.button("➕ ДОБАВИТЬ В ПУЛ", use_container_widt
 if st.sidebar.button("🗑 СБРОСИТЬ ПУЛ", use_container_width=True):
     st.session_state['data_pool'] = []
     st.toast("Пул данных очищен!")
-
-st.sidebar.divider()
-
-# 5. Режим статистики
-weight_mode = st.sidebar.radio("Режим нормировки", ["Count", "Area", "Volume"], horizontal=True)
-show_w_mean = st.sidebar.checkbox("Взвешенное среднее", value=True)
-show_w_median = st.sidebar.checkbox("Взвешенная медиана", value=True)
-show_u_mean = st.sidebar.checkbox("Арифм. среднее (простое)", value=False)
-show_kde_line = st.sidebar.checkbox("Линия KDE (тренд)", value=True)
 
 # ================= 5. ГЛАВНАЯ ЛОГИКА ОБРАБОТКИ (MAIN AREA) =================
 
@@ -372,9 +370,14 @@ if st.session_state['data_pool']:
         bin_max = all_d.max() * 1.1
         bins = np.logspace(np.log10(bin_min), np.log10(bin_max), 50)
         
-        # 3. Гистограмма
-        ax_hist.hist(all_d, bins=bins, weights=all_w, color='teal', alpha=0.5, 
-                     edgecolor='black', density=True, label='Histogram')
+        # ### ИСПРАВЛЕНИЕ 1: Нормируем веса к 1 (сумма всех весов = 1)
+        normalized_weights = all_w / np.sum(all_w)
+
+        # ### ИСПРАВЛЕНИЕ 2: Убираем density=True. 
+        # Теперь высота столбца - это просто доля частиц в этом логарифмическом бине.
+        # Так как ширина бинов на лог-шкале одинакова, визуальная площадь = вероятности.
+        ax_hist.hist(all_d, bins=bins, weights=normalized_weights, color='teal', alpha=0.5, 
+                     edgecolor='black', label='Histogram')
 
         # Простая статистика (без учета весов) для сравнения, если выбрано
         if show_u_mean:
@@ -390,22 +393,21 @@ if st.session_state['data_pool']:
         
         # KDE (тренд)
         if show_kde_line and len(all_d) > 3:
-            kde = gaussian_kde(np.log10(all_d), weights=all_w)
+            kde = gaussian_kde(np.log10(all_d), weights=normalized_weights)
             x_grid = np.logspace(np.log10(bin_min), np.log10(bin_max), 300)
-            y_kde = kde(np.log10(x_grid)) / (x_grid * np.log(10))
+            log_bin_width = np.log10(bins[1]) - np.log10(bins[0])
+            y_kde = kde(np.log10(x_grid)) * log_bin_width 
+            
             ax_hist.plot(x_grid, y_kde, color='black', lw=2, label='KDE Trend')
-    
-        # Не забудь обновить легенду, чтобы она видела только включенные линии
+            
         if any([show_w_mean, show_w_median, show_u_mean, show_kde_line]):
             ax_hist.legend(loc='upper right', frameon=True)
 
         # 6. Оформление осей
         ax_hist.set_xscale('log')
         ax_hist.set_xlabel('Diameter (nm)', fontweight='bold', fontsize=12)
-        ax_hist.set_ylabel(f'Density ({weight_mode}-weighted)', fontweight='bold', fontsize=12)
+        ax_hist.set_ylabel(f'Fraction of particles ({weight_mode})', fontweight='bold', fontsize=12)
         ax_hist.grid(True, which='both', alpha=0.2, ls='-')
-        
-        # 7. ЛЕГЕНДА (Вызываем ПЕРЕД сохранением)
         ax_hist.legend(loc='upper right', frameon=True, fontsize=10)
         
         # 8. ОТОБРАЖЕНИЕ В STREAMLIT
