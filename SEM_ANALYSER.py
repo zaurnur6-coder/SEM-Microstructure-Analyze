@@ -245,7 +245,7 @@ with col_min:
     min_size = st.number_input(
         "Min (нм)", 
         min_value=0.0, 
-        max_value=100000.0, 
+        max_value=1000000.0, 
         value=7.0,   # Твой пример
         step=0.5     # Позволяет настраивать очень точно
     )
@@ -254,7 +254,7 @@ with col_max:
     max_size = st.number_input(
         "Max (нм)", 
         min_value=0.0, 
-        max_value=100000.0, 
+        max_value=1000000.0, 
         value=34.0,  # Твой пример
         step=1.0
     )
