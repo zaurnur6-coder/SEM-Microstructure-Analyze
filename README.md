@@ -1,3 +1,5 @@
+beta features raw code and russian comments
+
 TO DO
 
 1) Explain settings
