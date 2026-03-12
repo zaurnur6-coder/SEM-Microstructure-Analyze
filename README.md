@@ -34,7 +34,7 @@ To run the analyzer locally, ensure you have Python 3.9+ installed, then:
 
 ## Requirements
 streamlit
-opencv-python
+opencv-python-headless
 numpy
 pandas
 matplotlib
