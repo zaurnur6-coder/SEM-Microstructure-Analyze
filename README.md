@@ -21,6 +21,14 @@ The core logic utilizes an isotropic growth model for 3D volume reconstruction f
 ## Installation
 To run the analyzer locally, ensure you have Python 3.9+ installed, then:
 
+0. Set up a virtual environment (optional but recommended):
+   ```bash
+   python -m venv venv
+   # On Windows:
+   venv\Scripts\activate
+   # On macOS/Linux:
+   source venv/bin/activate
+
 1. Clone the repository:
    ```bash
    git clone https://github.com/zaurnur6-coder/SEM-Microstructure-Analyze
