@@ -23,14 +23,14 @@ To run the analyzer locally, ensure you have Python 3.9+ installed, then:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/sem-analyzer.git
-   cd sem-analyzer
+   git clone https://github.com/zaurnur6-coder/SEM-Microstructure-Analyze
+   cd SEM-Microstructure-Analyze
 2. Install dependencies:
    ```bash
     pip install -r requirements.txt
 3. Launch the app:
     ```bash
-    streamlit run app.py
+    streamlit run SEM_analysis_toolkit.py
 
 ## Requirements
 streamlit
