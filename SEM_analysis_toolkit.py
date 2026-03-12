@@ -1,0 +1,375 @@
+import streamlit as st
+import cv2
+import numpy as np
+import os
+import io 
+import matplotlib.pyplot as plt
+import pandas as pd
+from scipy.stats import gaussian_kde
+import datetime
+
+st.set_page_config(layout="wide", page_title="SEM Analyzer")
+
+if 'data_pool' not in st.session_state:
+    st.session_state['data_pool'] = [] 
+
+# BACKEND LOGIC
+class SEMImageProcessor:
+    def __init__(self, image_path, scale_bar_nm, scale_bar_pixels, crop_bottom=0):
+        self.image_path = image_path
+        self.nm_per_pixel = scale_bar_nm / scale_bar_pixels if scale_bar_pixels > 0 else 0
+        self.crop_bottom = crop_bottom
+        self.original_img = None
+
+    def load_and_prepare(self):
+        try:
+            self.image_path.seek(0) 
+            file_bytes = np.asarray(bytearray(self.image_path.read()), dtype=np.uint8)
+            img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
+
+            if img is None: return None
+            if self.crop_bottom > 0: 
+                img = img[:-self.crop_bottom, :]
+            self.original_img = img
+            return img
+        except Exception as e:
+            raise IOError(f"Error image download: {e}")
+            return None
+
+    def segment(self, method_id=2, params=None):
+        if self.original_img is None: return None
+        if params is None: params = {}
+        
+        invert = params.get('invert', False)
+        thresh_type = cv2.THRESH_BINARY_INV if invert else cv2.THRESH_BINARY
+        
+        blur_size = params.get('blur_size', 3)
+        blur = cv2.medianBlur(self.original_img, blur_size if blur_size % 2 != 0 else blur_size + 1)
+        
+        mask = None
+        if method_id == 1: # Otsu
+            _, mask = cv2.threshold(blur, 0, 255, thresh_type + cv2.THRESH_OTSU)
+        elif method_id == 2: # Adaptive
+            blk = params.get('adaptive_block_size', 11)
+            if blk % 2 == 0: blk += 1
+            mask = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                        thresh_type, blk, params.get('adaptive_c', 2))
+        elif method_id == 3: # Top-Hat
+            k_size = params.get('tophat_kernel', 15)
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+            tophat = cv2.morphologyEx(blur, cv2.MORPH_TOPHAT, k)
+            _, mask = cv2.threshold(tophat, 0, 255, thresh_type + cv2.THRESH_OTSU)
+        
+        if params.get('enable_opening'):
+            s = params.get('open_kernel', 3)
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (s, s))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+        if params.get('enable_closing'):
+            s = params.get('close_kernel', 3)
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (s, s))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+        return mask
+
+    def analyze_particles(self, mask, min_nm, max_nm):
+        if mask is None: return {}, [], []
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        valid_data, acc_cnts, rej_cnts = [], [], []
+        
+        for cnt in contours:
+            area_px = cv2.contourArea(cnt)
+            if area_px <= 1: continue
+            d_nm = 2 * np.sqrt(area_px / np.pi) * self.nm_per_pixel
+            
+            if min_nm <= d_nm <= max_nm:
+                valid_data.append(d_nm)
+                acc_cnts.append(cnt)
+            else: 
+                rej_cnts.append(cnt)
+                
+        return {'diameters': valid_data, 'count': len(valid_data)}, acc_cnts, rej_cnts
+
+def get_weighted_stats(data, weights):
+    if len(data) == 0: return 0.0, 0.0
+    mean = np.average(data, weights=weights)
+    
+    sort_idx = np.argsort(data)
+    d_sorted = data[sort_idx]
+    w_sorted = weights[sort_idx]
+    cumsum_w = np.cumsum(w_sorted)
+    median = d_sorted[np.searchsorted(cumsum_w, cumsum_w[-1] / 2.0)]
+    return mean, median
+
+# (SIDEBAR)
+
+st.sidebar.header("📂 Image upload")
+
+uploaded_files = st.sidebar.file_uploader(
+    "Upload SEM images", 
+    type=['png', 'jpg', 'jpeg', 'tif'], 
+    accept_multiple_files=True
+)
+
+if not uploaded_files:
+    st.info("👈 Please, upload SEM images")
+    st.stop()
+
+selected_file = st.sidebar.selectbox(
+    "Choose file for interactions", 
+    options=uploaded_files, 
+    format_func=lambda x: x.name
+)
+
+image_full_path = selected_file
+st.sidebar.divider()
+
+st.sidebar.header("📏 Scale Bar calibration")
+col_nm, col_px, col_crop = st.sidebar.columns(3)
+
+with col_nm:
+    scale_nm = st.number_input("Scale bar Size (nm)", min_value=1.0, value=2000.0, step=100.0)
+
+with col_px:
+    scale_px = st.number_input("Scale bar Size (px)", min_value=1, value=122)
+
+with col_crop: 
+    crop_val = st.number_input("Size of bottom technical panel (px)", 0, 500, 88)
+
+st.sidebar.divider()
+
+st.sidebar.header("🔬 Settings")
+method_name = st.sidebar.selectbox("Threshold method", ["Adaptive", "Top-Hat", "Otsu"])
+method_id = {"Otsu": 1, "Adaptive": 2, "Top-Hat": 3}[method_name]
+
+params = {
+    'adaptive_block_size': 203,
+    'adaptive_c': 0,
+    'tophat_kernel': 113,
+    'blur_size': 3,
+    'invert': False
+}
+
+def synced_widget(label, min_val, max_val, default_val, step=1):
+    base_key = label.replace(" ", "_").lower()
+    s_key = f"slider_{base_key}"
+    n_key = f"number_{base_key}"
+
+    if s_key not in st.session_state:
+        st.session_state[s_key] = default_val
+    if n_key not in st.session_state:
+        st.session_state[n_key] = default_val
+
+    def update_slider():
+        st.session_state[s_key] = st.session_state[n_key]
+
+    def update_number():
+        st.session_state[n_key] = st.session_state[s_key]
+
+    st.markdown(f"**{label}**")
+    col_sl, col_num = st.columns([3, 2])
+
+    with col_sl:
+        st.slider(label, min_val, max_val, step=step, 
+                  key=s_key, on_change=update_number, label_visibility="collapsed")
+    with col_num:
+        st.number_input(label, min_val, max_val, step=step, 
+                        key=n_key, on_change=update_slider, label_visibility="collapsed")
+    
+    return st.session_state[s_key]
+    
+params['invert'] = st.sidebar.checkbox("Invert mask (b/w)", value=False)
+
+with st.sidebar:
+    params['blur_size'] = synced_widget("Median Blur", 1, 15, 3, step=2)
+
+if method_name == "Adaptive":
+    with st.sidebar:
+        params['adaptive_block_size'] = synced_widget("Block Size", 3, 1001, 203, step=2)
+        params['adaptive_c'] = synced_widget("C (Constant)", -30, 30, 0, step=1)
+        params['tophat_kernel'] = 113 
+    
+elif method_name == "Top-Hat":
+    with st.sidebar:
+        params['tophat_kernel'] = synced_widget("Top-Hat Kernel", 3, 501, 113, step=2)
+        params['adaptive_block_size'], params['adaptive_c'] = 203, 0
+    
+else: 
+    params['adaptive_block_size'], params['adaptive_c'], params['tophat_kernel'] = 203, 0, 113
+
+st.sidebar.divider()
+
+with st.sidebar.expander("Morphology (Noise reduction)"):
+    params['enable_opening'] = st.checkbox("Noise Reduction (Opening)", value=False)
+    if params['enable_opening']:
+        params['open_kernel'] = synced_widget("Open Kernel size", 3, 51, 3, step=2)
+    
+    params['enable_closing'] = st.checkbox("Feature Agglomeration (Closing)", value=True)
+    if params['enable_closing']:
+        params['close_kernel'] = synced_widget("Close Kernel size", 3, 51, 3, step=2)
+
+st.sidebar.header("📏 Size filter")
+col_min, col_max = st.sidebar.columns(2)
+
+with col_min:
+    min_size = st.number_input(
+        "Min (nm)", 
+        min_value=0.0, 
+        max_value=100000.0, 
+        value=7.0,   
+        step=0.5     
+    )
+
+with col_max:
+    max_size = st.number_input(
+        "Max (nm)", 
+        min_value=0.0, 
+        max_value=100000.0, 
+        value=34.0,  
+        step=1.0
+    )
+
+if min_size > max_size:
+    st.sidebar.error("Erorr: Min > Max")
+
+weight_mode = st.sidebar.radio("Normalization Mode", ["Count", "Area", "Volume"], horizontal=True)
+show_w_mean = st.sidebar.checkbox("Weighted Mean", value=True)
+show_w_median = st.sidebar.checkbox("Weighted Median", value=True)
+show_u_mean = st.sidebar.checkbox("Arithmetic Mean", value=False)
+show_kde_line = st.sidebar.checkbox("KDE Line (Trend)", value=True)
+
+st.sidebar.divider()
+
+st.sidebar.info(f"Images in pool: {len(st.session_state['data_pool'])} images")
+
+btn_add = st.sidebar.button("➕ ADD TO THE POOL", use_container_width=True)
+
+if st.sidebar.button("🗑 CLEAR POOL", use_container_width=True):
+    st.session_state['data_pool'] = []
+    st.toast("POOL CLEARED!")
+
+st.title("🔬 SEM Microstructure Analyzer")
+
+proc = SEMImageProcessor(image_full_path, scale_nm, scale_px, crop_bottom=crop_val)
+img = proc.load_and_prepare()
+
+if img is not None:
+    mask = proc.segment(method_id=method_id, params=params)
+    stats, acc_cnts, rej_cnts = proc.analyze_particles(mask, min_size, max_size)
+
+    st.subheader(f"Analysis: {selected_file.name}")
+    col_img1, col_img2 = st.columns(2)
+
+    with col_img1:
+        fig1, ax1 = plt.subplots()
+        ax1.imshow(mask, cmap='gray')
+        ax1.set_title("Mask (Binary)")
+        ax1.axis('off')
+        st.pyplot(fig1, clear_figure=True)
+
+    with col_img2:
+        fig2, ax2 = plt.subplots()
+        res_img = cv2.cvtColor(proc.original_img, cv2.COLOR_GRAY2BGR)
+        cv2.drawContours(res_img, acc_cnts, -1, (0, 255, 0), 2)
+        cv2.drawContours(res_img, rej_cnts, -1, (255, 0, 0), 1)
+        ax2.imshow(cv2.cvtColor(res_img, cv2.COLOR_BGR2RGB))
+        ax2.set_title(f"Particles count: {stats['count']}")
+        ax2.axis('off')
+        st.pyplot(fig2, clear_figure=True)
+
+    if btn_add:
+        h, w = proc.original_img.shape
+        nm_px = scale_nm / scale_px
+        new_entry = {
+            'diameters': stats['diameters'],
+            'area': (w * nm_px) * (h * nm_px),
+            'filename': selected_file
+        }
+        st.session_state['data_pool'].append(new_entry)
+        st.success(f"Added {stats['count']} particles from {selected_file.name}")
+
+if st.session_state['data_pool']:
+    st.divider()
+    st.subheader(f"📊 Summarize statistics of ({len(st.session_state['data_pool'])} images)")
+    
+    all_d = []
+    all_w = []
+    for entry in st.session_state['data_pool']:
+        d = np.array(entry['diameters'])
+        if weight_mode == 'Count':
+            w = np.ones_like(d) * (1e6 / entry['area'])
+        elif weight_mode == 'Area':
+            w = (np.pi * (d/2)**2) / entry['area']
+        else: # Volume sphere
+            w = ((4/3) * np.pi * (d/2)**3) / entry['area']
+        
+        all_d.extend(d)
+        all_w.extend(w)
+        
+    all_d = np.array(all_d)
+    all_w = np.array(all_w)
+    w_mean, w_median = get_weighted_stats(all_d, all_w)
+    
+    with plt.style.context("seaborn-v0_8-muted"): 
+        fig_hist, ax_hist = plt.subplots(figsize=(10, 6))
+
+        plt.rcParams.update({'font.family': 'serif', 'font.serif': ['Times New Roman']})
+
+        bin_min = max(all_d.min() * 0.9, 0.1) 
+        bin_max = all_d.max() * 1.1
+        bins = np.logspace(np.log10(bin_min), np.log10(bin_max), 50)
+
+        normalized_weights = all_w / np.sum(all_w)
+
+        ax_hist.hist(all_d, bins=bins, weights=normalized_weights, color='teal', alpha=0.5, 
+                     edgecolor='black', label='Histogram')
+
+        if show_u_mean:
+            u_mean = np.mean(all_d)
+            ax_hist.axvline(u_mean, color='gray', ls='--', alpha=0.6, label=f'Simple Mean: {u_mean:.1f}')
+
+        if show_w_mean:
+            ax_hist.axvline(w_mean, color='red', ls='-', lw=2, label=f'W. Mean: {w_mean:.1f} nm')
+        
+        if show_w_median:
+            ax_hist.axvline(w_median, color='blue', ls=':', lw=2, label=f'W. Median: {w_median:.1f} nm')
+        
+        # KDE
+        if show_kde_line and len(all_d) > 3:
+            kde = gaussian_kde(np.log10(all_d), weights=normalized_weights)
+            x_grid = np.logspace(np.log10(bin_min), np.log10(bin_max), 300)
+            log_bin_width = np.log10(bins[1]) - np.log10(bins[0])
+            y_kde = kde(np.log10(x_grid)) * log_bin_width 
+            
+            ax_hist.plot(x_grid, y_kde, color='black', lw=2, label='KDE Trend')
+            
+        if any([show_w_mean, show_w_median, show_u_mean, show_kde_line]):
+            ax_hist.legend(loc='upper right', frameon=True)
+
+        ax_hist.set_xscale('log')
+        ax_hist.set_xlabel('Diameter (nm)', fontweight='bold', fontsize=12)
+        ax_hist.set_ylabel(f'Fraction of particles ({weight_mode})', fontweight='bold', fontsize=12)
+        ax_hist.grid(True, which='both', alpha=0.2, ls='-')
+        ax_hist.legend(loc='upper right', frameon=True, fontsize=10)
+        
+        st.pyplot(fig_hist)
+
+        buf = io.BytesIO()
+        fig_hist.savefig(buf, format="pdf", dpi=600, bbox_inches='tight')
+        
+        st.download_button(
+            label="💾 Download image (PDF)",
+            data=buf.getvalue(),
+            file_name=f"SEM_Report_{datetime.datetime.now().strftime('%H%M%S')}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+        plt.close(fig_hist)
+    
+    df_pool = pd.DataFrame(all_d, columns=['Diameter_nm'])
+    csv = df_pool.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download data (CSV)", data=csv, file_name="sem_data.csv", mime='text/csv')
+
+else:
+    st.info("Pool is empty. Add images to the pool to evaluate statistics")
+
+
+    
